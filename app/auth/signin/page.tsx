@@ -1,7 +1,5 @@
 "use client"
 
-import type React from "react"
-
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
@@ -22,7 +20,7 @@ export default function SignInPage() {
   const [showPassword, setShowPassword] = useState(false)
   const router = useRouter()
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setIsLoading(true)
     setError("")
@@ -41,8 +39,6 @@ export default function SignInPage() {
       if (!response.ok) {
         throw new Error(data.error || "Something went wrong")
       }
-
-      // Redirect to dashboard
       router.push("/dashboard")
       router.refresh()
     } catch (error) {
@@ -52,7 +48,7 @@ export default function SignInPage() {
     }
   }
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e) => {
     setFormData({
       ...formData,
       [e.target.name]: e.target.value,

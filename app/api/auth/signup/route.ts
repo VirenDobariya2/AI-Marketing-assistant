@@ -1,66 +1,82 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { connectDB } from "@/lib/mongodb"
-import { hashPassword, generateOTP } from "@/lib/auth"
-import { sendPasswordResetEmail } from "@/lib/email"
-import { z } from "zod"
 import { User } from "@/lib/models/User"
+import { hashPassword } from "@/lib/auth"
+import { generateToken } from "@/lib/auth-simple"
+import { z } from "zod"
 
-const signupSchema = z
-  .object({
-    name: z.string().min(2, "Name must be at least 2 characters"),
-    email: z.string().email("Invalid email address"),
-    password: z.string().min(6, "Password must be at least 6 characters"),
-    confirmPassword: z.string(),
-  })
-  .refine((data) => data.password === data.confirmPassword, {
-    message: "Passwords don't match",
-    path: ["confirmPassword"],
-  })
+const signupSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters"),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+})
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const validatedData = signupSchema.parse(body)
+    const { name, email, password } = signupSchema.parse(body)
 
+    // Connect to database
     await connectDB()
 
     // Check if user already exists
-    const existingUser = await User.findOne({ email: validatedData.email })
+    const existingUser = await User.findOne({ email: email.toLowerCase() })
     if (existingUser) {
-      return NextResponse.json({ error: "User already exists with this email" }, { status: 400 })
+      return NextResponse.json({ error: "Email is already registered" }, { status: 400 })
     }
 
-    // Hash password and generate OTP
-    const hashedPassword = await hashPassword(validatedData.password)
-    const verificationToken = generateOTP()
+    // Hash password
+    const hashedPassword = await hashPassword(password)
 
     // Create user
-    const user = new User({
-      name: validatedData.name,
-      email: validatedData.email,
+    const user = await User.create({
+      name,
+      email: email.toLowerCase(),
       password: hashedPassword,
-      role: "user",
       isVerified: false,
-      verificationToken,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     })
 
-    const result = await user.save()
-
-    // Send verification email
-    await sendPasswordResetEmail(validatedData.email, verificationToken)
-
-    return NextResponse.json({
-      message: "User created successfully. Please check your email for verification code.",
-      userId: result._id,
+    // Generate token
+    const token = generateToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
     })
+
+    // Create response
+    const response = NextResponse.json(
+      {
+        message: "Account created successfully",
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      },
+      { status: 201 },
+    )
+
+    // Set HTTP-only cookie
+    response.cookies.set("auth-token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 7, 
+    })
+
+    return response
   } catch (error) {
+    console.error("Signup error:", error)
+
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "Validation failed", details: error.errors }, { status: 400 })
+      return NextResponse.json({ error: error.errors[0].message }, { status: 400 })
     }
 
-    console.error("Signup error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
+}
+
+export const config = {
+  runtime: "nodejs",
 }

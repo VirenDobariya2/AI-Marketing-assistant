@@ -1,123 +1,80 @@
-import { type NextRequest, NextResponse } from "next/server"
-import { rateLimits } from "./lib/rate-limit"
-import { SecurityUtils, securityHeaders } from "./lib/security"
-import { logger } from "./lib/logger"
-import { validateToken } from "@/lib/auth"
+import { NextResponse } from "next/server"
+import type { NextRequest } from "next/server"
+import jwt from "jsonwebtoken"
 
-export async function middleware(request: NextRequest) {
-  const startTime = Date.now()
+// Simple JWT validation without any database dependencies
+function validateToken(token: string): boolean {
+  try {
+    const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
+    jwt.verify(token, JWT_SECRET)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Skip middleware for static files, internal Next.js routes, public routes, and API routes
+  console.log("Middleware running for:", pathname)
+
+  // Allow all static files and API routes to pass through
   if (
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/api/health") ||
-    pathname.startsWith("/api/docs") ||
-    pathname === "/" ||
-    pathname === "/auth/signin" ||
-    pathname === "/auth/signup" ||
-    pathname === "/auth/forgot-password" ||
-    pathname === "/auth/verify" ||
-    pathname === "/features" ||
-    pathname === "/pricing" ||
-    pathname === "/blog" ||
-    pathname === "/contact" ||
-    pathname === "/team" ||
-    pathname === "/faq" ||
-    pathname === "/documentation" ||
-    pathname === "/privacy-policy" ||
-    pathname === "/terms" ||
-    pathname.includes(".")
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/static") ||
+    pathname.includes(".") ||
+    pathname === "/favicon.ico"
   ) {
     return NextResponse.next()
   }
 
-  try {
-    // Security checks
-    if (SecurityUtils.detectSuspiciousActivity(request)) {
-      logger.warn("Suspicious activity detected", {
-        ip: request.ip,
-        userAgent: request.headers.get("user-agent"),
-        path: pathname,
-      })
-      return NextResponse.json({ error: "Access denied" }, { status: 403 })
-    }
+  // Allow public pages
+  const publicPaths = [
+    "/",
+    "/auth/signin",
+    "/auth/signup",
+    "/auth/forgot-password",
+    "/auth/verify",
+    "/features",
+    "/pricing",
+    "/blog",
+    "/contact",
+    "/team",
+    "/faq",
+    "/documentation",
+    "/privacy-policy",
+    "/terms",
+  ]
 
-    // Apply rate limiting for API routes
-    if (pathname.startsWith("/api/")) {
-      const limitType = pathname.startsWith("/api/auth/") ? "auth" : pathname.startsWith("/api/ai/") ? "ai" : "api"
-
-      const rateLimitResult = await rateLimits[limitType](request)
-
-      if (!rateLimitResult.success) {
-        logger.warn(`Rate limit exceeded: ${pathname}`, {
-          ip: request.ip,
-          retryAfter: rateLimitResult.retryAfter,
-        })
-
-        return NextResponse.json(
-          { error: rateLimitResult.error },
-          {
-            status: 429,
-            headers: {
-              "Retry-After": rateLimitResult.retryAfter?.toString() || "60",
-              "X-RateLimit-Remaining": "0",
-            },
-          },
-        )
-      }
-    }
-
-    // Check for authentication token
-    const token = request.cookies.get("authToken")?.value
-
-    if (!token) {
-      return NextResponse.redirect(new URL("/auth/signin", request.url))
-    }
-
-    const payload = await validateToken(token)
-
-    // Add user info to headers for use in API routes
-    const response = NextResponse.next()
-    response.headers.set("X-User-ID", payload.userId)
-    response.headers.set("X-User-Email", payload.email)
-
-    // Add security headers
-    Object.entries(securityHeaders).forEach(([key, value]) => {
-      response.headers.set(key, value)
-    })
-
-    // Add performance headers
-    const duration = Date.now() - startTime
-    response.headers.set("X-Response-Time", `${duration}ms`)
-
-    // Log request
-    logger.info(`${request.method} ${pathname}`, {
-      ip: request.ip,
-      userAgent: request.headers.get("user-agent"),
-      duration,
-    })
-
-    return response
-  } catch (error) {
-    logger.error("Middleware error", error, {
-      path: pathname,
-      ip: request.ip,
-    })
-
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  if (publicPaths.includes(pathname)) {
+    return NextResponse.next()
   }
+
+  // Check for authentication token for protected routes
+  if (pathname.startsWith("/dashboard")) {
+    const token = request.cookies.get("auth-token")?.value
+
+    if (!token || !validateToken(token)) {
+      const url = new URL("/auth/signin", request.url)
+      url.searchParams.set("redirect", pathname)
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // Allow the request to continue
+  return NextResponse.next()
 }
 
 export const config = {
   matcher: [
     /*
      * Match all request paths except for the ones starting with:
+     * - api (API routes)
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      */
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico).*)",
   ],
 }
